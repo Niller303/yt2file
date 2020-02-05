@@ -1,0 +1,18 @@
+[Unit]
+Description=Youtube to MP3 HTTP Server
+After=network.target
+
+[Service]
+WorkingDirectory=/mnt/myfiles/GeneralShare2/code/yt2file
+
+User=niller
+Group=niller
+
+Restart=always
+
+Environment=FLASK_APP=run.py
+Environment=FLASK_RUN_PORT=8283
+ExecStart=/usr/bin/flask run --host=0.0.0.0
+
+[Install]
+WantedBy=multi-user.target
