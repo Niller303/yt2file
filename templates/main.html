@@ -15,7 +15,7 @@
 				height: 200px;
 				background-color: #f4f4f4;
 			}
-			#prog1 {
+			.prog1 {
 				width: 350px;
 			}
 			.button1 {
@@ -25,17 +25,27 @@
 		</style>
 		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
 		<script>
-			function countInstances(string, word) {
-				return string.split(word).length - 1;
-			}
 			function run() {
 				var textarea = $("#inputarea");
+				var progress = document.getElementById("progressbar")
 
-				$.post("run.php", textarea.val(), function(result) {
-					var links = eval(result); //Such unsafe
-					console.log(links)
-					links.forEach(element => window.open(element, "_blank"));
-				});
+				var xhr = new XMLHttpRequest();
+				var lastPos = 0;
+				xhr.onreadystatechange = function() {
+					if(xhr.readyState >= 3) {
+						var data = xhr.responseText.substring(lastPos);
+						lastPos = xhr.responseText.length;
+
+						console.log(data);
+						progress.value = parseInt(progress.value) + 1;
+						window.open(data, "_blank");
+					} 
+				};
+				xhr.open("POST", "run.php");
+				var vids = textarea.val().split("\n");
+				progress.max = vids.length;
+				progress.value = 0;
+				xhr.send(JSON.stringify(textarea.val().split("\n")));
 			}
 		</script>
 	</head>
@@ -45,7 +55,7 @@
 			<br><br>
 			<textarea id="inputarea"></textarea>
 		</div>
-		<progress value="0" max="1" id="prog1"></progress>
+		<progress value="0" max="100" class="prog1" id="progressbar"></progress> 
 		<br>
 		<button onclick="run()" class="button1">Go</button>
 	</body>

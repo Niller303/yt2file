@@ -1,18 +1,17 @@
-#!/usr/bin/env python3
-"""
-Very simple HTTP server in python for logging requests
-Usage::
-	./server.py [<port>]
-"""
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from flask import Flask, escape, request, render_template, send_from_directory, send_file, Response
 import logging
 import youtube_dl
 import hashlib
+import re
 import shutil
 import json
 import os
+import io
 
-temporary_dir = "temp"
+temporary_dir = "/mnt/myfiles/ytdl_temp"
+#temporary_dir = "C:\\ytdl_temp"
+
+app = Flask(__name__)
 
 ydl_opts = {
 	'format': 'bestaudio/best',
@@ -24,107 +23,66 @@ ydl_opts = {
 	'keepvideo': False,
 	'outtmpl': '%(title)s.%(ext)s'
 }
-ydl = None
+ydl_opts["outtmpl"] = os.path.join(temporary_dir,ydl_opts["outtmpl"])
+ydl = youtube_dl.YoutubeDL(ydl_opts)
 
 filecache = {}
-class S(BaseHTTPRequestHandler):
-	def _set_response(self):
-		self.send_response(200)
-		self.send_header("Content-type", "text/html")
-		self.end_headers()
 
-	def do_GET(self):
-		logging.info("GET request,\nPath: %s\nHeaders:\n%s\n", str(self.path), str(self.headers))
-		if (self.path == "/"):
-			# Send the html message
-			self._set_response()
-			with open("main.html", "r") as file_object:
-				self.wfile.write(file_object.read().encode("utf8"))
-			
-		if (self.path == "/favicon.ico"):
-			self.send_response(404)
+if (not os.path.isdir(temporary_dir)):
+	os.mkdir(temporary_dir)
 
-		if (self.path.startswith("/download/")):
-			temp_hash = self.path[len("/download/"):]
-			if (temp_hash in filecache):
-				filename = filecache.pop(temp_hash)
+for root, path, files in os.walk(temporary_dir):
+	for filename in files:
+		temp_hash = hashlib.md5(str.encode(filename)).hexdigest()
+		filecache[temp_hash] = filename
+		print(filename + ": " + temp_hash)
 
-				with open(filename, 'rb') as file:
-					self.send_response(200)
-					self.send_header('Content-Type', 'audio/mp3')
-					self.send_header('Content-Disposition', 'attachment; filename=\"%s\"' % os.path.basename(filename))
-					fs = os.fstat(file.fileno())
-					self.send_header("Content-Length", str(fs.st_size))
-					self.end_headers()
-					shutil.copyfileobj(file, self.wfile)
+@app.route("/", methods=["GET","POST"])
+def hello():
+	return render_template("main.html")
 
-				os.remove(filename)
-			else:
-				self.send_response(404)
+@app.route("/run.php", methods=["POST"])
+def run():
+	data = request.get_json(force=True)
+	def generate():
+		for i in data:
+			m = re.search("youtube.com\/watch\?v=([\w\d\-]+)", i)
+			if (m):
+				info = ydl.extract_info("https://www.youtube.com/watch?v=" + m.group(1), download=True)
+				filename = ydl.prepare_filename(info)
+				filename = filename[:filename.rfind(".")] + ".mp3"
+				filename = os.path.basename(filename) #Linux has different behaviour, for some reason
 
-	def do_POST(self):
-		content_length = int(self.headers["Content-Length"]) # <--- Gets the size of data
-		post_data = self.rfile.read(content_length) # <--- Gets the data itself
-		body_data = post_data.decode("utf-8")
-		logging.info("POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n", str(self.path), str(self.headers), body_data)
-		if (self.path == "/run.php"):
-			lst = []
-			for i in body_data.split("\n"):
-				if (not i):
-					continue
+				temp_hash = hashlib.md5(str.encode(filename)).hexdigest()
+				filecache[temp_hash] = filename
 
-				try:
-					info = ydl.extract_info(i, download=True)
-					filename = ydl.prepare_filename(info)
-					filename = filename[:filename.rfind(".")] + ".mp3"
+				yield "/download/" + temp_hash #See if you cant abuse partial content
 
-					temp_hash = hashlib.md5(str.encode(filename)).hexdigest()
-					filecache[temp_hash] = filename
+	return Response(generate())
 
-					lst.append("/download/" + temp_hash) #See if you cant abuse partial content
-				except Exception:
-					self.send_response(400)
-					self.end_headers()
-					return
-			
-			response = json.dumps(lst).encode("utf-8")
-			self.send_response(200)
-			self.send_header("Content-Length", str(len(response)))
-			self.end_headers()
-			self.wfile.write(response)
+@app.route("/download/<hash>")
+def download(hash):
+	if (hash in filecache):
+		filename = filecache.pop(hash)
+		filepath = os.path.join(temporary_dir, filename)
 
+		return_data = io.BytesIO()
+		with open(filepath, 'rb') as fo:
+			return_data.write(fo.read())
+		# (after writing, cursor will be at last byte, so move it to start)
+		return_data.seek(0)
 
-def run(server_class=HTTPServer, handler_class=S, port=8080, tmp_dir="temp"):
-	global ydl
-	global ydl_opts
-	global temporary_dir
+		os.remove(filepath)
 
-	logging.basicConfig(level=logging.INFO)
-	server_address = ('', port)
-	httpd = server_class(server_address, handler_class)
-	logging.info("Starting httpd...\n")
-	
-	temporary_dir = tmp_dir
-	try:
-		os.mkdir(temporary_dir)
-	except Exception:
-		pass
-
-	ydl_opts["outtmpl"] = os.path.join(temporary_dir,ydl_opts["outtmpl"])
-	ydl = youtube_dl.YoutubeDL(ydl_opts)
-
-	try:
-		httpd.serve_forever()
-	except KeyboardInterrupt:
-		pass
-	httpd.server_close()
-	logging.info("Stopping httpd...\n")
-	#ydl.close()
-
-if __name__ == "__main__":
-	from sys import argv
-
-	if len(argv) == 3:
-		run(port=int(argv[1]),tmp_dir=str(argv[2]))
+		logging.info("Filename: " + filename)
+		return send_file(return_data,
+			mimetype="audio/mpeg",
+			attachment_filename=filename,
+			as_attachment=True,
+		)
 	else:
-		run()
+		return "Lol no"
+
+logging.basicConfig(level=logging.INFO)
+if __name__ == "__main__":
+	app.run()
